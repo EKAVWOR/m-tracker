@@ -1,4 +1,4 @@
-// app/(tabs)/add.js
+// app/add.js
 import React, {
   useState,
   useRef,
@@ -21,10 +21,12 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 
-import { useTransactions } from "../../context/TransactionContext";
-import { useTheme } from "../../context/ThemeContext";
-
-/* ---------- Animation wrapper ---------- */
+import { useTransactions } from "../context/TransactionContext";
+import { useTheme } from "../context/ThemeContext";
+import { useCurrency } from "../context/CurrencyContext";
+import { useBudget, getMonthKey } from "../context/BudgetContext";
+// app/add.js
+import { formatNumber } from "../utils/Number";
 
 function FadeInSection({ delay = 0, style, children }) {
   const opacity = useRef(new Animated.Value(0)).current;
@@ -191,7 +193,7 @@ function CategorySelector({
 
 export default function AddTransactionScreen() {
   const router = useRouter();
-  const { editId } = useLocalSearchParams(); // ?editId=...
+  const { editId } = useLocalSearchParams();
   const {
     transactions,
     addTransaction,
@@ -210,6 +212,9 @@ export default function AddTransactionScreen() {
   );
 
   const { colors } = useTheme();
+  const { currency } = useCurrency();
+  const { getBudgetForMonth } = useBudget();
+
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [type, setType] = useState(
@@ -226,10 +231,29 @@ export default function AddTransactionScreen() {
     existingTx?.categoryId || null
   );
   const [error, setError] = useState("");
+  const [remainingAfter, setRemainingAfter] = useState(null); // 👈 NEW
 
-  // Categories for current type
   const activeCategories =
     type === "expense" ? expenseCategories : incomeCategories;
+
+  const monthKey = useMemo(() => getMonthKey(new Date()), []);
+  const currentBudget = useMemo(
+    () => getBudgetForMonth(monthKey),
+    [getBudgetForMonth, monthKey]
+  );
+
+  // Sum expenses for this month
+  const spentThisMonth = useMemo(() => {
+    let total = 0;
+    transactions.forEach((t) => {
+      const d = new Date(t.createdAt || t.date);
+      if (Number.isNaN(d.getTime())) return;
+      if (getMonthKey(d) === monthKey && t.amount < 0) {
+        total += t.amount;
+      }
+    });
+    return total; // negative
+  }, [transactions, monthKey]);
 
   // When editing and tx becomes available, ensure local state is filled
   useEffect(() => {
@@ -257,6 +281,20 @@ export default function AddTransactionScreen() {
     }
   }, [isEditing, type, expenseCategories, incomeCategories, activeCategories]);
 
+  // Recalculate remaining budget after this expense
+  useEffect(() => {
+    if (!currentBudget?.totalBudget || type !== "expense") {
+      setRemainingAfter(null);
+      return;
+    }
+    const parsed = parseFloat(amountInput.replace(/,/g, "."));
+    const newExpense =
+      !Number.isNaN(parsed) && parsed > 0 ? Math.abs(parsed) : 0;
+    const spentAbs = Math.abs(spentThisMonth);
+    const remaining = currentBudget.totalBudget - (spentAbs + newExpense);
+    setRemainingAfter(remaining);
+  }, [amountInput, currentBudget, spentThisMonth, type]);
+
   const openCategorySettings = () => {
     router.push("/(tabs)/settings");
   };
@@ -279,7 +317,6 @@ export default function AddTransactionScreen() {
     }
   };
 
-  // Clear fields after saving a NEW transaction
   const resetForm = () => {
     setType("expense");
     setAmountInput("");
@@ -323,7 +360,6 @@ export default function AddTransactionScreen() {
     };
 
     if (isEditing && existingTx) {
-      // EDIT: update then go back
       updateTransaction(existingTx.id, {
         ...baseFields,
         createdAt: existingTx.createdAt || now.toISOString(),
@@ -331,7 +367,6 @@ export default function AddTransactionScreen() {
       });
       router.back();
     } else {
-      // NEW: add and clear form, stay on screen
       const newTx = {
         id: Date.now().toString(),
         ...baseFields,
@@ -376,7 +411,9 @@ export default function AddTransactionScreen() {
             styles={styles}
           />
 
-          <Text style={[styles.label, { marginTop: 18 }]}>Amount (₦)</Text>
+          <Text style={[styles.label, { marginTop: 18 }]}>
+            Amount ({currency.symbol})
+          </Text>
           <TextInput
             value={amountInput}
             onChangeText={setAmountInput}
@@ -385,6 +422,36 @@ export default function AddTransactionScreen() {
             style={styles.input}
             placeholderTextColor={colors.textMuted}
           />
+
+          {/* Budget hint: only when a budget is set and adding an expense */}
+          {currentBudget?.totalBudget && type === "expense" && (
+            <View style={styles.budgetHint}>
+              <Text style={styles.budgetText}>
+                Monthly budget ({monthKey}): {currency.symbol}
+                {formatNumber(currentBudget.totalBudget)}
+              </Text>
+              <Text style={styles.budgetText}>
+                Spent so far this month: {currency.symbol}
+                {formatNumber(Math.abs(spentThisMonth))}
+              </Text>
+              {remainingAfter !== null && (
+                <Text
+                  style={[
+                    styles.budgetText,
+                    remainingAfter < 0 && { color: colors.danger },
+                  ]}
+                >
+                  {remainingAfter >= 0
+                    ? `Remaining after this expense: ${currency.symbol}${formatNumber(
+                        remainingAfter
+                      )}`
+                    : `You will exceed your budget by ${currency.symbol}${formatNumber(
+                        Math.abs(remainingAfter)
+                      )}`}
+                </Text>
+              )}
+            </View>
+          )}
 
           <Text style={[styles.label, { marginTop: 18 }]}>
             Description (optional)
@@ -398,7 +465,6 @@ export default function AddTransactionScreen() {
             multiline
           />
 
-          {/* Photo */}
           <Text style={[styles.label, { marginTop: 18 }]}>
             Photo (optional)
           </Text>
@@ -478,7 +544,7 @@ const createStyles = (COLORS) =>
     header: {
       flexDirection: "row",
       alignItems: "flex-start",
-      paddingTop: 18,
+      paddingTop: 50,
       paddingBottom: 10,
       paddingHorizontal: 18,
       backgroundColor: COLORS.primary,
@@ -643,6 +709,15 @@ const createStyles = (COLORS) =>
     clearPhotoText: {
       fontSize: 12,
       color: COLORS.textMuted,
+    },
+
+    budgetHint: {
+      marginTop: 8,
+    },
+    budgetText: {
+      fontSize: 12,
+      color: COLORS.textMuted,
+      marginTop: 2,
     },
 
     errorText: {

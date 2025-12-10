@@ -10,8 +10,10 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useTransactions } from "../../../context/TransactionContext";
-import { useTheme } from "../../../context/ThemeContext";
+
+import { useTransactions } from "../../context/TransactionContext";
+import { useTheme } from "../../context/ThemeContext";
+import { useCurrency } from "../../context/CurrencyContext";   // 👈 NEW
 
 const formatNumber = (n = 0) =>
   Math.abs(Math.round(n))
@@ -51,6 +53,7 @@ export default function TransactionDetails() {
   const { id } = useLocalSearchParams();
   const { transactions, deleteTransaction } = useTransactions();
   const { colors } = useTheme();
+  const { currency } = useCurrency();                          // 👈 NEW
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const tx = transactions?.find((t) => String(t.id) === String(id));
@@ -70,9 +73,9 @@ export default function TransactionDetails() {
   }
 
   const isIncome = tx.amount > 0;
-  const amountLabel = `${isIncome ? "+" : "-"}₦${formatNumber(
-    Math.abs(tx.amount)
-  )}`;
+  const amountLabel = `${isIncome ? "+" : "-"}${
+    currency.symbol
+  }${formatNumber(Math.abs(tx.amount))}`;                       // 👈 UPDATED
 
   const createdAt = tx.createdAt || tx.date;
   let dateLabel = "Unknown date";
@@ -94,7 +97,6 @@ export default function TransactionDetails() {
   };
 
   const handleEdit = () => {
-    // If your Add screen is at app/(tabs)/add.js, use "/(tabs)/add"
     router.push({ pathname: "/add", params: { editId: tx.id } });
   };
 

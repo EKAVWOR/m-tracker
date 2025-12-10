@@ -8,8 +8,10 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { useRouter } from "expo-router";
+
 import { useTransactions } from "../../context/TransactionContext";
 import { useTheme } from "../../context/ThemeContext";
+import { useCurrency } from "../../context/CurrencyContext";   // 👈 NEW
 
 const formatNumber = (n = 0) =>
   Math.abs(Math.round(n))
@@ -48,6 +50,7 @@ export default function HistoryScreen() {
   const router = useRouter();
   const { transactions } = useTransactions();
   const { colors } = useTheme();
+  const { currency } = useCurrency();                         // 👈 NEW
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const sections = useMemo(() => {
@@ -122,7 +125,8 @@ export default function HistoryScreen() {
                     isIncome ? styles.income : styles.expense,
                   ]}
                 >
-                  {isIncome ? "+" : "-"}₦
+                  {isIncome ? "+" : "-"}
+                  {currency.symbol}
                   {formatNumber(Math.abs(item.amount))}
                 </Text>
                 <Text style={styles.txTime}>
@@ -146,7 +150,7 @@ const createStyles = (COLORS) =>
     header: {
       backgroundColor: COLORS.primary,
       paddingHorizontal: 20,
-      paddingTop: 20,
+      paddingTop: 50,
       paddingBottom: 16,
       borderBottomLeftRadius: 24,
       borderBottomRightRadius: 24,

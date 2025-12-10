@@ -11,8 +11,12 @@ import {
   TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+
 import { useTransactions } from "../../context/TransactionContext";
 import { useTheme } from "../../context/ThemeContext";
+import { useAuth } from "../../context/AuthContext";
+import { useCurrency } from "../../context/CurrencyContext";
 
 function FadeInSection({ delay = 0, style, children }) {
   const opacity = useRef(new Animated.Value(0)).current;
@@ -52,7 +56,7 @@ const createStyles = (COLORS) =>
     header: {
       backgroundColor: COLORS.primary,
       paddingHorizontal: 20,
-      paddingTop: 20,
+      paddingTop: 50,
       paddingBottom: 16,
       borderBottomLeftRadius: 24,
       borderBottomRightRadius: 24,
@@ -133,6 +137,35 @@ const createStyles = (COLORS) =>
       color: COLORS.text,
     },
 
+    // Currency chips
+    currencyRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      marginTop: 6,
+      marginBottom: 8,
+    },
+    currencyChip: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: COLORS.border,
+      marginRight: 8,
+      marginTop: 6,
+    },
+    currencyChipActive: {
+      backgroundColor: COLORS.accentBlue,
+      borderColor: COLORS.accentBlue,
+    },
+    currencyChipText: {
+      fontSize: 12,
+      color: COLORS.text,
+    },
+    currencyChipTextActive: {
+      color: "#fff",
+      fontWeight: "600",
+    },
+
     // Categories
     categoryList: {
       flexDirection: "row",
@@ -201,16 +234,37 @@ const createStyles = (COLORS) =>
       fontWeight: "700",
       color: "#fff",
     },
+
+    // Logout
+    logoutButton: {
+      marginTop: 12,
+      alignSelf: "flex-start",
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: COLORS.border,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    logoutText: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: COLORS.text,
+    },
   });
 
 export default function SettingsScreen() {
   const {
-    setTransactions,
+    setTransactions, // may be undefined; we guard below
     expenseCategories,
     incomeCategories,
     addCategory,
   } = useTransactions();
   const { isDark, colors, toggleTheme } = useTheme();
+  const { logout } = useAuth();
+  const { currency, currencies, setCode } = useCurrency();
+  const router = useRouter();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [newExpenseName, setNewExpenseName] = useState("");
@@ -236,7 +290,15 @@ export default function SettingsScreen() {
     setNewIncomeName("");
   };
 
-  // Local component so it can use `styles`
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace("/(auth)/login");
+    } catch (e) {
+      console.log("Logout error", e);
+    }
+  };
+
   const PreferenceRow = ({
     icon,
     label,
@@ -373,7 +435,7 @@ export default function SettingsScreen() {
           </View>
         </FadeInSection>
 
-        {/* General */}
+        {/* General + Currency + Logout */}
         <FadeInSection
           delay={200}
           style={[styles.card, styles.shadowCard, { marginTop: 16 }]}
@@ -382,13 +444,49 @@ export default function SettingsScreen() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Currency</Text>
-            <Text style={styles.infoValue}>₦ Nigerian Naira</Text>
+            <Text style={styles.infoValue}>{currency.label}</Text>
+          </View>
+
+          <View style={styles.currencyRow}>
+            {currencies.map((c) => {
+              const active = c.code === currency.code;
+              return (
+                <TouchableOpacity
+                  key={c.code}
+                  style={[
+                    styles.currencyChip,
+                    active && styles.currencyChipActive,
+                  ]}
+                  onPress={() => setCode(c.code)}
+                >
+                  <Text
+                    style={[
+                      styles.currencyChipText,
+                      active && styles.currencyChipTextActive,
+                    ]}
+                  >
+                    {c.symbol} {c.code}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Version</Text>
             <Text style={styles.infoValue}>1.0.0</Text>
           </View>
+
+          {/* Logout button */}
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Ionicons
+              name="log-out-outline"
+              size={16}
+              color={colors.text}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={styles.logoutText}>Log out</Text>
+          </TouchableOpacity>
         </FadeInSection>
 
         {/* Danger zone */}

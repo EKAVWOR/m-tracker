@@ -12,7 +12,8 @@ import {
 import { Link } from "expo-router";
 import { useTransactions } from "../../context/TransactionContext";
 import { useTheme } from "../../context/ThemeContext";
-import Logo from "../../assets/images/m-tracker-logo.png"; // update path if needed
+import { useCurrency } from "../../context/CurrencyContext";   // 👈 NEW
+import Logo from "../../assets/images/m-tracker-logo.png";
 
 const formatNumber = (n = 0) =>
   Math.abs(Math.round(n))
@@ -47,7 +48,7 @@ function FadeInSection({ delay = 0, style, children }) {
   );
 }
 
-/* ---------- Section components (get styles/colors via props) ---------- */
+/* ---------- Section components ---------- */
 
 function HeaderSection({ styles }) {
   return (
@@ -68,7 +69,14 @@ function HeaderSection({ styles }) {
   );
 }
 
-function DashboardSummary({ styles, colors, income, expenses, balance }) {
+function DashboardSummary({
+  styles,
+  colors,
+  income,
+  expenses,
+  balance,
+  currency,         // 👈 NEW
+}) {
   const totalExpensesAbs = Math.abs(expenses);
 
   return (
@@ -78,26 +86,33 @@ function DashboardSummary({ styles, colors, income, expenses, balance }) {
       <View style={styles.dashboardRow}>
         <View style={[styles.metricCard, styles.incomeCard]}>
           <Text style={styles.metricLabel}>Income</Text>
-          <Text style={styles.metricValue}>₦{formatNumber(income)}</Text>
+          <Text style={styles.metricValue}>
+            {currency.symbol}
+            {formatNumber(income)}
+          </Text>
         </View>
 
         <View style={[styles.metricCard, styles.expenseCard]}>
           <Text style={styles.metricLabel}>Expenses</Text>
           <Text style={styles.metricValue}>
-            -₦{formatNumber(totalExpensesAbs)}
+            -{currency.symbol}
+            {formatNumber(totalExpensesAbs)}
           </Text>
         </View>
       </View>
 
       <View style={[styles.metricCard, styles.balanceCard]}>
         <Text style={styles.metricLabel}>Balance</Text>
-        <Text style={styles.metricValue}>₦{formatNumber(balance)}</Text>
+        <Text style={styles.metricValue}>
+          {currency.symbol}
+          {formatNumber(balance)}
+        </Text>
       </View>
     </FadeInSection>
   );
 }
 
-function RecentTransactionsSection({ styles, transactions }) {
+function RecentTransactionsSection({ styles, transactions, currency }) {
   const recent = [...transactions].slice(-5).reverse();
 
   return (
@@ -132,12 +147,11 @@ function RecentTransactionsSection({ styles, transactions }) {
                 <Text
                   style={[
                     styles.transactionAmount,
-                    isIncome
-                      ? styles.amountIncome
-                      : styles.amountExpense,
+                    isIncome ? styles.amountIncome : styles.amountExpense,
                   ]}
                 >
-                  {isIncome ? "+" : "-"}₦
+                  {isIncome ? "+" : "-"}
+                  {currency.symbol}
                   {formatNumber(Math.abs(item.amount))}
                 </Text>
               </TouchableOpacity>
@@ -149,7 +163,7 @@ function RecentTransactionsSection({ styles, transactions }) {
   );
 }
 
-function StatisticsPreview({ styles, colors, income, expenses }) {
+function StatisticsPreview({ styles, colors, income, expenses, currency }) {
   const spent = Math.abs(expenses);
   const ratio = income > 0 ? Math.min(1, spent / income) : 0;
   const percent = income > 0 ? Math.round((spent / income) * 100) : 0;
@@ -190,7 +204,8 @@ function StatisticsPreview({ styles, colors, income, expenses }) {
             ]}
           />
           <Text style={styles.statsPillText}>
-            Income ₦{formatNumber(income)}
+            Income {currency.symbol}
+            {formatNumber(income)}
           </Text>
         </View>
         <View style={styles.statsPill}>
@@ -201,7 +216,8 @@ function StatisticsPreview({ styles, colors, income, expenses }) {
             ]}
           />
           <Text style={styles.statsPillText}>
-            Expenses ₦{formatNumber(spent)}
+            Expenses {currency.symbol}
+            {formatNumber(spent)}
           </Text>
         </View>
       </View>
@@ -214,6 +230,7 @@ function StatisticsPreview({ styles, colors, income, expenses }) {
 export default function HomeScreen() {
   const { transactions } = useTransactions();
   const { colors } = useTheme();
+  const { currency } = useCurrency();                 // 👈 NEW
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const { income, expenses, balance } = useMemo(() => {
@@ -240,16 +257,19 @@ export default function HomeScreen() {
           income={income}
           expenses={expenses}
           balance={balance}
+          currency={currency}                  // 👈 PASS
         />
         <RecentTransactionsSection
           styles={styles}
           transactions={transactions}
+          currency={currency}                  // 👈 PASS
         />
         <StatisticsPreview
           styles={styles}
           colors={colors}
           income={income}
           expenses={expenses}
+          currency={currency}                  // 👈 PASS
         />
       </ScrollView>
 
@@ -279,7 +299,7 @@ const createStyles = (COLORS) =>
     header: {
       backgroundColor: COLORS.primary,
       paddingHorizontal: 20,
-      paddingTop: 18,
+      paddingTop: 50,
       paddingBottom: 24,
       borderBottomLeftRadius: 24,
       borderBottomRightRadius: 24,

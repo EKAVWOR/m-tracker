@@ -2,20 +2,36 @@
 import React, {
   createContext,
   useContext,
-  useState,
   useEffect,
+  useState,
 } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  orderBy,
+} from "firebase/firestore";
+import { auth, db } from "../firebaseConfig";
 
 const TransactionContext = createContext(null);
 
-const STORAGE_KEYS = {
-  transactions: "@mtracker/transactions",
-  expenseCategories: "@mtracker/expenseCategories",
-  incomeCategories: "@mtracker/incomeCategories",
-};
+// Remove any fields that are undefined (Firestore doesn't allow undefined)
+function cleanData(obj) {
+  const out = {};
+  Object.entries(obj).forEach(([key, value]) => {
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  });
+  return out;
+}
 
-// Default expense categories
+// Default categories
 const DEFAULT_EXPENSE_CATEGORIES = [
   { id: "food", label: "Food" },
   { id: "transport", label: "Transport" },
@@ -25,7 +41,6 @@ const DEFAULT_EXPENSE_CATEGORIES = [
   { id: "other-expense", label: "Other" },
 ];
 
-// Default income categories
 const DEFAULT_INCOME_CATEGORIES = [
   { id: "salary", label: "Salary" },
   { id: "freelance", label: "Freelance" },
@@ -35,6 +50,7 @@ const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 export function TransactionProvider({ children }) {
+  const [userId, setUserId] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [expenseCategories, setExpenseCategories] = useState(
     DEFAULT_EXPENSE_CATEGORIES
@@ -42,80 +58,83 @@ export function TransactionProvider({ children }) {
   const [incomeCategories, setIncomeCategories] = useState(
     DEFAULT_INCOME_CATEGORIES
   );
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Load data on mount
+  // Watch auth state
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [txStr, expStr, incStr] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.transactions),
-          AsyncStorage.getItem(STORAGE_KEYS.expenseCategories),
-          AsyncStorage.getItem(STORAGE_KEYS.incomeCategories),
-        ]);
-
-        if (txStr) {
-          const parsed = JSON.parse(txStr);
-          if (Array.isArray(parsed)) setTransactions(parsed);
-        }
-        if (expStr) {
-          const parsed = JSON.parse(expStr);
-          if (Array.isArray(parsed)) setExpenseCategories(parsed);
-        }
-        if (incStr) {
-          const parsed = JSON.parse(incStr);
-          if (Array.isArray(parsed)) setIncomeCategories(parsed);
-        }
-      } catch (e) {
-        console.warn("Failed to load stored data", e);
-      } finally {
-        setIsLoaded(true);
-      }
-    };
-    load();
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid ?? null);
+    });
+    return unsub;
   }, []);
 
-  // Persist changes
+  // Subscribe to user transactions in Firestore
   useEffect(() => {
-    if (!isLoaded) return;
-    AsyncStorage.setItem(
-      STORAGE_KEYS.transactions,
-      JSON.stringify(transactions)
-    ).catch((e) => console.warn("Failed to save transactions", e));
-  }, [transactions, isLoaded]);
+    if (!userId) {
+      setTransactions([]);
+      setLoading(false);
+      return;
+    }
 
-  useEffect(() => {
-    if (!isLoaded) return;
-    AsyncStorage.setItem(
-      STORAGE_KEYS.expenseCategories,
-      JSON.stringify(expenseCategories)
-    ).catch((e) => console.warn("Failed to save expense categories", e));
-  }, [expenseCategories, isLoaded]);
+    setLoading(true);
 
-  useEffect(() => {
-    if (!isLoaded) return;
-    AsyncStorage.setItem(
-      STORAGE_KEYS.incomeCategories,
-      JSON.stringify(incomeCategories)
-    ).catch((e) => console.warn("Failed to save income categories", e));
-  }, [incomeCategories, isLoaded]);
-
-  // API
-  const addTransaction = (tx) => {
-    setTransactions((prev) => [...prev, tx]);
-  };
-
-  const updateTransaction = (id, updates) => {
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    const q = query(
+      collection(db, "users", userId, "transactions"),
+      orderBy("createdAt", "desc")
     );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs.map((d) => {
+          const data = d.data();
+          return { id: d.id, ...data };
+        });
+        setTransactions(items);
+        setLoading(false);
+      },
+      (error) => {
+        console.warn("Error listening to transactions:", error);
+        setLoading(false);
+      }
+    );
+
+    return unsub;
+  }, [userId]);
+
+  const requireUserId = () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error("User not logged in");
+    return uid;
   };
 
-  const deleteTransaction = (id) => {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
+  // ---- CRUD operations ----
+
+  const addTransaction = async (tx) => {
+    const uid = requireUserId();
+    const id = tx.id || Date.now().toString();
+    const docRef = doc(db, "users", uid, "transactions", id);
+
+    const data = cleanData({ ...tx, id }); // strip undefined fields
+    await setDoc(docRef, data);
   };
 
-  // kind: "expense" | "income"
+  const updateTransaction = async (id, updates) => {
+    const uid = requireUserId();
+    const docRef = doc(db, "users", uid, "transactions", id);
+
+    const data = cleanData(updates); // strip undefined fields
+    await updateDoc(docRef, data);
+  };
+
+  const deleteTransaction = async (id) => {
+    const uid = requireUserId();
+    const docRef = doc(db, "users", uid, "transactions", id);
+    await deleteDoc(docRef);
+  };
+
+  // ---- local categories ----
+
   const addCategory = (kind, name) => {
     const label = name.trim();
     if (!label) return;
@@ -123,31 +142,30 @@ export function TransactionProvider({ children }) {
 
     if (kind === "income") {
       setIncomeCategories((prev) => {
-        const exists = prev.some(
-          (c) => c.label.toLowerCase() === label.toLowerCase()
-        );
-        return exists ? prev : [...prev, { id, label }];
+        if (prev.some((c) => c.label.toLowerCase() === label.toLowerCase()))
+          return prev;
+        return [...prev, { id, label }];
       });
     } else {
       setExpenseCategories((prev) => {
-        const exists = prev.some(
-          (c) => c.label.toLowerCase() === label.toLowerCase()
-        );
-        return exists ? prev : [...prev, { id, label }];
+        if (prev.some((c) => c.label.toLowerCase() === label.toLowerCase()))
+          return prev;
+        return [...prev, { id, label }];
       });
     }
   };
 
   const value = {
-    isLoaded,
+    loading,
     transactions,
-    setTransactions,
     addTransaction,
     updateTransaction,
     deleteTransaction,
     expenseCategories,
     incomeCategories,
     addCategory,
+    // expose setTransactions for your Danger zone reset
+    setTransactions,
   };
 
   return (

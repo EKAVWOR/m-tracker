@@ -1,19 +1,25 @@
 // app/(tabs)/stats.js
-import React, { useMemo, useRef, useEffect } from "react";
+import React, { useMemo, useRef, useEffect, useState } from "react";
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
   Animated,
+  Pressable,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { useTransactions } from "../../context/TransactionContext";
 import { useTheme } from "../../context/ThemeContext";
+import { useCurrency } from "../../context/CurrencyContext";
+import { useBudget, getMonthKey } from "../../context/BudgetContext";
 
 const formatNumber = (n = 0) =>
-  Math.abs(Math.round(n))
+  Math.abs(Math.round(Number(n) || 0))
     .toString()
     .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+/* Animations */
 
 function FadeInSection({ delay = 0, style, children }) {
   const opacity = useRef(new Animated.Value(0)).current;
@@ -43,34 +49,206 @@ function FadeInSection({ delay = 0, style, children }) {
   );
 }
 
-/* Components */
+/* Date helpers */
 
-function StatsHeader({ styles }) {
+function getTxDate(tx) {
+  const d = tx?.date ?? tx?.createdAt ?? tx?.timestamp;
+  if (!d) return null;
+  if (d instanceof Date) return d;
+  if (typeof d === "string") return new Date(d);
+  if (typeof d === "number") return new Date(d);
+  if (d?.toDate) return d.toDate(); // Firestore Timestamp
+  return null;
+}
+
+function startOfMonth(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+}
+
+// Sunday as start of week; adjust offset if Monday is preferred
+function startOfWeek(date = new Date()) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0..6
+  d.setDate(d.getDate() - day);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function isInRange(tx, range) {
+  if (range === "all") return true;
+  const d = getTxDate(tx);
+  if (!d) return range === "all";
+  const now = new Date();
+  if (range === "month") return d >= startOfMonth(now) && d <= now;
+  if (range === "week") return d >= startOfWeek(now) && d <= now;
+  return true;
+}
+
+/* UI sections */
+
+function StatsHeader({ styles, currency, selectedRange, onChangeRange }) {
+  const chips = [
+    { key: "month", label: "This month" },
+    { key: "week", label: "This week" },
+    { key: "all", label: "All time" },
+  ];
+
   return (
     <View style={styles.header}>
-      <Text style={styles.headerTitle}>Statistics</Text>
-      <Text style={styles.headerSubtitle}>
-        Get a deeper insight into your income and spending.
-      </Text>
-
-      <View style={styles.chipRow}>
-        <View style={[styles.chip, styles.chipActive]}>
-          <Text style={[styles.chipText, styles.chipTextActive]}>
-            This month
+      <View style={styles.headerTopRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Statistics</Text>
+          <Text style={styles.headerSubtitle}>
+            Get a deeper insight into your income and spending.
           </Text>
         </View>
-        <View style={styles.chip}>
-          <Text style={styles.chipText}>This week</Text>
+
+        <View style={styles.currencyPill}>
+          <Text style={styles.currencyPillText}>
+            {currency?.code ? `${currency.code} ` : ""}
+            {currency?.symbol || ""}
+          </Text>
         </View>
-        <View style={styles.chip}>
-          <Text style={styles.chipText}>All time</Text>
-        </View>
+      </View>
+
+      <View style={styles.chipRow}>
+        {chips.map((c) => {
+          const active = selectedRange === c.key;
+          return (
+            <Pressable
+              key={c.key}
+              onPress={() => onChangeRange(c.key)}
+              style={[styles.chip, active && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                {c.label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
 }
 
-function OverviewSection({ styles, colors, income, expenses, balance, count }) {
+function BudgetSection({
+  styles,
+  colors,
+  currency,
+  monthKey,
+  loading,
+  budget, // { totalBudget, ... } or null
+  spentAbs, // absolute spent this month
+  onPressManage,
+}) {
+  if (loading) {
+    return (
+      <FadeInSection delay={40} style={[styles.card, styles.shadowCard]}>
+        <Text style={styles.sectionTitle}>Monthly Budget</Text>
+        <Text style={styles.sectionSubtitle}>Loading {monthKey}...</Text>
+      </FadeInSection>
+    );
+  }
+
+  if (!budget) {
+    return (
+      <FadeInSection delay={40} style={[styles.card, styles.shadowCard]}>
+        <Text style={styles.sectionTitle}>Monthly Budget</Text>
+        <Text style={styles.emptyText}>
+          No budget set for {monthKey}. Start a plan to track your monthly spending.
+        </Text>
+        <Pressable style={styles.ctaButton} onPress={onPressManage}>
+          <Text style={styles.ctaButtonText}>Set monthly budget</Text>
+        </Pressable>
+      </FadeInSection>
+    );
+  }
+
+  const total = Number(budget.totalBudget) || 0;
+  const usedClamped = Math.min(spentAbs, Math.max(total, 0));
+  const ratio = total > 0 ? Math.min(1, usedClamped / total) : 0;
+  const percent = total > 0 ? Math.round((spentAbs / total) * 100) : 0;
+  const remaining = total - spentAbs;
+  const over = remaining < 0;
+
+  return (
+    <FadeInSection delay={40} style={[styles.card, styles.shadowCard]}>
+      <Text style={styles.sectionTitle}>Monthly Budget</Text>
+      <Text style={styles.sectionSubtitle}>Plan for {monthKey}</Text>
+
+      <View style={styles.overviewRow}>
+        <View style={styles.overviewItem}>
+          <Text style={styles.overviewLabel}>Budget</Text>
+          <Text style={[styles.overviewValue, { color: colors.accentBlue }]}>
+            {currency.symbol}
+            {formatNumber(total)}
+          </Text>
+        </View>
+        <View style={styles.overviewItem}>
+          <Text style={styles.overviewLabel}>Spent</Text>
+          <Text style={[styles.overviewValue, { color: "#FF5B5B" }]}>
+            -{currency.symbol}
+            {formatNumber(spentAbs)}
+          </Text>
+        </View>
+        <View style={styles.overviewItem}>
+          <Text style={styles.overviewLabel}>{over ? "Over" : "Remaining"}</Text>
+          <Text
+            style={[
+              styles.overviewValue,
+              { color: over ? "#FF5B5B" : colors.accentGreen },
+            ]}
+          >
+            {over ? "-" : ""}
+            {currency.symbol}
+            {formatNumber(Math.abs(remaining))}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.progressRow}>
+        <Text style={styles.progressLabel}>
+          {Math.abs(percent)}% of budget used
+        </Text>
+        <Text style={styles.progressLabelSecondary}>
+          {over ? "Over by" : "Left"}: {currency.symbol}
+          {formatNumber(Math.abs(remaining))}
+        </Text>
+      </View>
+
+      <View style={styles.progressBarBackground}>
+        <View
+          style={[
+            styles.progressBarFill,
+            {
+              width: `${ratio * 100}%`,
+              backgroundColor: over ? "#FF5B5B" : colors.accentBlue,
+            },
+          ]}
+        />
+      </View>
+
+      <Pressable
+        style={[styles.ctaButton, { marginTop: 10, backgroundColor: COLORS_TO_RGBA(colors.accentBlue, 0.12) }]}
+        onPress={onPressManage}
+      >
+        <Text style={[styles.ctaButtonText, { color: colors.accentBlue }]}>
+          Manage budget
+        </Text>
+      </Pressable>
+    </FadeInSection>
+  );
+}
+
+function OverviewSection({
+  styles,
+  colors,
+  income,
+  expenses,
+  balance,
+  count,
+  currency,
+}) {
   const spentAbs = Math.abs(expenses);
   const ratio = income > 0 ? Math.min(1, spentAbs / income) : 0;
   const percent = income > 0 ? Math.round((spentAbs / income) * 100) : 0;
@@ -85,35 +263,32 @@ function OverviewSection({ styles, colors, income, expenses, balance, count }) {
       <View style={styles.overviewRow}>
         <View style={styles.overviewItem}>
           <Text style={styles.overviewLabel}>Income</Text>
-          <Text
-            style={[
-              styles.overviewValue,
-              { color: colors.accentGreen },
-            ]}
-          >
-            ₦{formatNumber(income)}
+          <Text style={[styles.overviewValue, { color: colors.accentGreen }]}>
+            {currency.symbol}
+            {formatNumber(income)}
           </Text>
         </View>
         <View style={styles.overviewItem}>
           <Text style={styles.overviewLabel}>Expenses</Text>
           <Text style={[styles.overviewValue, { color: "#FF5B5B" }]}>
-            -₦{formatNumber(spentAbs)}
+            -{currency.symbol}
+            {formatNumber(spentAbs)}
           </Text>
         </View>
         <View style={styles.overviewItem}>
           <Text style={styles.overviewLabel}>Balance</Text>
           <Text style={styles.overviewValue}>
-            ₦{formatNumber(balance)}
+            {currency.symbol}
+            {formatNumber(balance)}
           </Text>
         </View>
       </View>
 
       <View style={styles.progressRow}>
-        <Text style={styles.progressLabel}>
-          {percent}% of income spent
-        </Text>
+        <Text style={styles.progressLabel}>{percent}% of income spent</Text>
         <Text style={styles.progressLabelSecondary}>
-          Remaining: ₦{formatNumber(income - spentAbs)}
+          Remaining: {currency.symbol}
+          {formatNumber(income - spentAbs)}
         </Text>
       </View>
 
@@ -121,7 +296,7 @@ function OverviewSection({ styles, colors, income, expenses, balance, count }) {
         <View
           style={[
             styles.progressBarFill,
-            { width: `${ratio * 100}%` },
+            { width: `${ratio * 100}%`, backgroundColor: colors.accentGreen },
           ]}
         />
       </View>
@@ -129,11 +304,8 @@ function OverviewSection({ styles, colors, income, expenses, balance, count }) {
   );
 }
 
-function ActivitySection({ styles, colors, transactions }) {
-  const last7 = [...transactions]
-    .filter((t) => t.amount < 0)
-    .slice(-7)
-    .reverse();
+function ActivitySection({ styles, colors, transactions, currency }) {
+  const last7 = [...transactions].filter((t) => t.amount < 0).slice(-7).reverse();
 
   if (last7.length === 0) {
     return (
@@ -158,8 +330,7 @@ function ActivitySection({ styles, colors, transactions }) {
     >
       <Text style={styles.sectionTitle}>Spending activity</Text>
       <Text style={styles.sectionSubtitle}>
-        Last {last7.length} expense transaction
-        {last7.length === 1 ? "" : "s"}.
+        Last {last7.length} expense transaction{last7.length === 1 ? "" : "s"}.
       </Text>
 
       {last7.map((t) => {
@@ -170,9 +341,7 @@ function ActivitySection({ styles, colors, transactions }) {
               <Text style={styles.barTitle} numberOfLines={1}>
                 {t.title}
               </Text>
-              {t.date && (
-                <Text style={styles.barSubtitle}>{t.date}</Text>
-              )}
+              {t.date && <Text style={styles.barSubtitle}>{t.date}</Text>}
             </View>
 
             <View style={styles.barContainer}>
@@ -188,7 +357,8 @@ function ActivitySection({ styles, colors, transactions }) {
             </View>
 
             <Text style={styles.barAmount}>
-              ₦{formatNumber(Math.abs(t.amount))}
+              {currency.symbol}
+              {formatNumber(Math.abs(t.amount))}
             </Text>
           </View>
         );
@@ -197,7 +367,13 @@ function ActivitySection({ styles, colors, transactions }) {
   );
 }
 
-function IncomeVsExpenseSection({ styles, colors, income, expenses }) {
+function IncomeVsExpenseSection({
+  styles,
+  colors,
+  income,
+  expenses,
+  currency,
+}) {
   const spentAbs = Math.abs(expenses);
   const total = income + spentAbs || 1;
   const incomeRatio = income / total;
@@ -228,24 +404,18 @@ function IncomeVsExpenseSection({ styles, colors, income, expenses }) {
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View
-            style={[
-              styles.legendDot,
-              { backgroundColor: colors.accentGreen },
-            ]}
+            style={[styles.legendDot, { backgroundColor: colors.accentGreen }]}
           />
           <Text style={styles.legendText}>
-            Income • ₦{formatNumber(income)}
+            Income • {currency.symbol}
+            {formatNumber(income)}
           </Text>
         </View>
         <View style={styles.legendItem}>
-          <View
-            style={[
-              styles.legendDot,
-              { backgroundColor: "#FF5B5B" },
-            ]}
-          />
+          <View style={[styles.legendDot, { backgroundColor: "#FF5B5B" }]} />
           <Text style={styles.legendText}>
-            Expenses • ₦{formatNumber(spentAbs)}
+            Expenses • {currency.symbol}
+            {formatNumber(spentAbs)}
           </Text>
         </View>
       </View>
@@ -256,47 +426,103 @@ function IncomeVsExpenseSection({ styles, colors, income, expenses }) {
 /* Screen */
 
 export default function StatsScreen() {
+  const router = useRouter();
   const { transactions } = useTransactions();
   const { colors } = useTheme();
+  const { currency } = useCurrency();
+  const { loading: budgetLoading, getBudgetForMonth } = useBudget();
+
+  const [selectedRange, setSelectedRange] = useState("month"); // month | week | all
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  // Filter transactions by selected range
+  const filteredTransactions = useMemo(
+    () => transactions.filter((t) => isInRange(t, selectedRange)),
+    [transactions, selectedRange]
+  );
+
+  // Period stats
   const { income, expenses, balance } = useMemo(() => {
     let income = 0;
     let expenses = 0;
-    transactions.forEach((t) => {
-      if (t.amount > 0) income += t.amount;
-      else if (t.amount < 0) expenses += t.amount;
+    filteredTransactions.forEach((t) => {
+      const amt = Number(t.amount) || 0;
+      if (amt > 0) income += amt;
+      else if (amt < 0) expenses += amt;
     });
     return { income, expenses, balance: income + expenses };
+  }, [filteredTransactions]);
+
+  // Budget is always for the current month
+  const monthKey = useMemo(() => getMonthKey(new Date()), []);
+  const monthlyBudget = getBudgetForMonth(monthKey);
+
+  // Spent this month (absolute)
+  const spentThisMonthAbs = useMemo(() => {
+    const now = new Date();
+    const som = startOfMonth(now);
+    let total = 0;
+    transactions.forEach((t) => {
+      const amt = Number(t.amount) || 0;
+      if (amt >= 0) return;
+      const d = getTxDate(t);
+      if (!d) return;
+      if (d >= som && d <= now) total += Math.abs(amt);
+    });
+    return total;
   }, [transactions]);
+
+  const openBudget = () => router.push("/budget");
 
   return (
     <View style={styles.container}>
-      <StatsHeader styles={styles} />
+      <StatsHeader
+        styles={styles}
+        currency={currency}
+        selectedRange={selectedRange}
+        onChangeRange={setSelectedRange}
+      />
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
+        {/* Monthly budget (current month only) */}
+        <BudgetSection
+          styles={styles}
+          colors={colors}
+          currency={currency}
+          monthKey={monthKey}
+          loading={budgetLoading}
+          budget={monthlyBudget}
+          spentAbs={spentThisMonthAbs}
+          onPressManage={openBudget}
+        />
+
         <OverviewSection
           styles={styles}
           colors={colors}
           income={income}
           expenses={expenses}
           balance={balance}
-          count={transactions.length}
+          count={filteredTransactions.length}
+          currency={currency}
         />
+
         <ActivitySection
           styles={styles}
           colors={colors}
-          transactions={transactions}
+          transactions={filteredTransactions}
+          currency={currency}
         />
+
         <IncomeVsExpenseSection
           styles={styles}
           colors={colors}
           income={income}
           expenses={expenses}
+          currency={currency}
         />
       </ScrollView>
     </View>
@@ -304,6 +530,18 @@ export default function StatsScreen() {
 }
 
 /* Themed styles */
+
+function COLORS_TO_RGBA(hexOrColor, alpha = 1) {
+  // naive rgba helper for accentBlue; if color is already rgba, return it
+  if (!hexOrColor || typeof hexOrColor !== "string") return `rgba(0,0,0,${alpha})`;
+  if (hexOrColor.startsWith("rgba") || hexOrColor.startsWith("rgb")) return hexOrColor;
+  // Expect #RRGGBB
+  const hex = hexOrColor.replace("#", "");
+  const r = parseInt(hex.substring(0, 2), 16) || 0;
+  const g = parseInt(hex.substring(2, 4), 16) || 0;
+  const b = parseInt(hex.substring(4, 6), 16) || 0;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 const createStyles = (COLORS) =>
   StyleSheet.create({
@@ -318,10 +556,15 @@ const createStyles = (COLORS) =>
     header: {
       backgroundColor: COLORS.primary,
       paddingHorizontal: 20,
-      paddingTop: 20,
+      paddingTop: 50,
       paddingBottom: 18,
       borderBottomLeftRadius: 24,
       borderBottomRightRadius: 24,
+    },
+    headerTopRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      justifyContent: "space-between",
     },
     headerTitle: {
       fontSize: 22,
@@ -332,7 +575,24 @@ const createStyles = (COLORS) =>
       marginTop: 6,
       fontSize: 13,
       color: COLORS.text,
+      opacity: 0.9,
     },
+    currencyPill: {
+      alignSelf: "flex-start",
+      backgroundColor: COLORS.card,
+      borderRadius: 999,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderWidth: 1,
+      borderColor: COLORS.border,
+      marginLeft: 8,
+    },
+    currencyPillText: {
+      fontSize: 12,
+      color: COLORS.text,
+      fontWeight: "600",
+    },
+
     chipRow: {
       flexDirection: "row",
       marginTop: 14,
@@ -501,5 +761,19 @@ const createStyles = (COLORS) =>
     legendText: {
       fontSize: 12,
       color: COLORS.text,
+    },
+
+    ctaButton: {
+      marginTop: 12,
+      alignSelf: "flex-start",
+      backgroundColor: COLORS.accentBlue,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 10,
+    },
+    ctaButtonText: {
+      color: "white",
+      fontWeight: "700",
+      fontSize: 13,
     },
   });
